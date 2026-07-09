@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>RERA India — Registered Projects Dashboard</title>
+<style>
+  :root{--bg:#0f172a;--card:#1e293b;--ink:#e2e8f0;--mut:#94a3b8;--acc:#38bdf8;--line:#334155}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 system-ui,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--ink)}
+  header{padding:18px 24px;border-bottom:1px solid var(--line);display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
+  h1{font-size:18px;margin:0}
+  .sub{color:var(--mut);font-size:12px}
+  .wrap{padding:20px 24px;max-width:1300px;margin:0 auto}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:18px}
+  .stat{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px}
+  .stat b{font-size:22px;display:block}
+  .stat span{color:var(--mut);font-size:12px}
+  .filters{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:16px}
+  input,select,button{background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:9px 11px;font:inherit}
+  button{cursor:pointer;background:var(--acc);color:#04263a;border:0;font-weight:600}
+  button.ghost{background:var(--card);color:var(--ink);border:1px solid var(--line)}
+  table{width:100%;border-collapse:collapse;background:var(--card);border-radius:10px;overflow:hidden}
+  th,td{text-align:left;padding:9px 11px;border-bottom:1px solid var(--line);font-size:13px;vertical-align:top}
+  th{color:var(--mut);font-weight:600;position:sticky;top:0;background:#243247}
+  tr:hover td{background:#243247}
+  .pill{font-size:11px;padding:2px 8px;border-radius:999px;background:#064e3b;color:#6ee7b7}
+  .bar{display:flex;justify-content:space-between;align-items:center;margin:12px 0;gap:10px;flex-wrap:wrap}
+  .mut{color:var(--mut)}
+  a{color:var(--acc)}
+</style>
+</head>
+<body>
+<header>
+  <h1>🏗️ RERA India — Registered Projects</h1>
+  <span class="sub">Pan-India real-estate project registry · live-scraped data</span>
+</header>
+<div class="wrap">
+  <div class="cards" id="stats"></div>
+
+  <div class="filters">
+    <input id="search" placeholder="Search project / promoter / reg no…">
+    <select id="state"><option value="">All states</option></select>
+    <select id="district"><option value="">All districts</option></select>
+    <input id="promoter" placeholder="Promoter contains…">
+    <select id="status"><option value="">Any status</option></select>
+    <input id="since" type="date" title="First seen since">
+  </div>
+  <div class="bar">
+    <div><button onclick="load()">Apply filters</button>
+      <button class="ghost" onclick="reset()">Reset</button>
+      <button class="ghost" onclick="newWeek()">🆕 New this week</button></div>
+    <div><span class="mut" id="count"></span>
+      <button class="ghost" onclick="exportXlsx()">⬇ Export Excel</button></div>
+  </div>
+
+  <table>
+    <thead><tr>
+      <th>State</th><th>Reg No</th><th>Project</th><th>Promoter</th>
+      <th>District</th><th>Type</th><th>Units</th><th>Status</th><th>First seen</th>
+    </tr></thead>
+    <tbody id="rows"><tr><td colspan="9" class="mut">Loading…</td></tr></tbody>
+  </table>
+  <div class="bar">
+    <button class="ghost" onclick="page(-1)">← Prev</button>
+    <span class="mut" id="pageinfo"></span>
+    <button class="ghost" onclick="page(1)">Next →</button>
+  </div>
+</div>
+<script>
+let offset=0, limit=100, lastTotal=0;
+const $=id=>document.getElementById(id);
+const params=()=>new URLSearchParams({state:$('state').value,district:$('district').value,
+  promoter:$('promoter').value,status:$('status').value,search:$('search').value,since:$('since').value});
+
+async function boot(){
+  const f=await (await fetch('/api/filters')).json();
+  f.states.forEach(s=>$('state').append(new Option(s,s)));
+  f.districts.forEach(s=>$('district').append(new Option(s,s)));
+  f.statuses.forEach(s=>$('status').append(new Option(s,s)));
+  const st=await (await fetch('/api/stats')).json();
+  $('stats').innerHTML =
+    card(st.total.toLocaleString(),'Total projects')+
+    st.by_state.slice(0,3).map(x=>card(x.n.toLocaleString(),x.state)).join('')+
+    card((st.latest_ingest||'—').slice(0,10),'Latest ingest');
+  load();
+}
+const card=(b,s)=>`<div class="stat"><b>${b}</b><span>${s}</span></div>`;
+
+async function load(){
+  const p=params(); p.set('limit',limit); p.set('offset',offset);
+  const d=await (await fetch('/api/projects?'+p)).json();
+  lastTotal=d.total;
+  $('rows').innerHTML = d.results.length? d.results.map(r=>`<tr>
+    <td>${r.state}</td><td>${r.rera_reg_no||''}</td><td>${r.project_name||''}</td>
+    <td>${r.promoter_name||''}</td><td>${r.district||''}</td><td>${r.project_type||''}</td>
+    <td>${r.total_units||''}</td><td><span class="pill">${r.status||''}</span></td>
+    <td class="mut">${(r.first_seen||'').slice(0,10)}</td></tr>`).join('')
+    : '<tr><td colspan="9" class="mut">No matching projects.</td></tr>';
+  $('count').textContent = d.total.toLocaleString()+' match';
+  $('pageinfo').textContent = `${offset+1}–${Math.min(offset+limit,d.total)} of ${d.total.toLocaleString()}`;
+}
+function page(dir){ const n=offset+dir*limit; if(n>=0&&n<lastTotal){offset=n;load();} }
+function reset(){ ['search','promoter','since'].forEach(i=>$(i).value='');
+  ['state','district','status'].forEach(i=>$(i).value=''); offset=0; load(); }
+function newWeek(){ const d=new Date(Date.now()-7*864e5); $('since').value=d.toISOString().slice(0,10); offset=0; load(); }
+function exportXlsx(){ window.location='/api/export?'+params(); }
+['search','promoter'].forEach(i=>$(i).addEventListener('keydown',e=>{if(e.key==='Enter'){offset=0;load();}}));
+['state','district','status','since'].forEach(i=>$(i).addEventListener('change',()=>{offset=0;load();}));
+boot();
+</script>
+</body>
+</html>

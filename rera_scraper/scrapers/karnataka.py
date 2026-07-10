@@ -1,10 +1,8 @@
 """K-RERA (Karnataka) - validated live July 2026.
 
-Public project list at https://rera.karnataka.gov.in/viewAllProjects is a form
-with a District dropdown. Selecting a district + Search POSTs and reloads at
-/projectViewDetails rendering a jQuery DataTable of ALL that district's
-projects. We iterate every district and read the full result set straight from
-the DataTable API (no pagination clicks). Bengaluru Urban alone ~4,300 rows.
+viewAllProjects is a District-dropdown form; Search POSTs to /projectViewDetails
+rendering a jQuery DataTable of ALL that district's projects. Iterate districts,
+read the full result set from the DataTable API.
 """
 from datetime import datetime, timezone
 
@@ -16,8 +14,8 @@ SEARCH_URL = "https://rera.karnataka.gov.in/viewAllProjects"
 
 class KarnatakaScraper(PlaywrightScraper):
     CODE = "KA"
-    DISTRICTS = None            # None = all districts
-    STATUS_FILTER = {"APPROVED"}  # registered projects only
+    DISTRICTS = None
+    STATUS_FILTER = {"APPROVED"}
 
     def scrape(self):
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -73,3 +71,51 @@ class KarnatakaScraper(PlaywrightScraper):
                 taluk: clean(r[8]), ptype: clean(r[9]), approved: clean(r[11]),
                 completion: clean(r[12] || '') }; });
         }""")
+
+
+# ---- Chhattisgarh (co-located due to GitHub web new-file limitation) ----
+URL = "https://rera.cgstate.gov.in/approved_project_list.aspx"
+
+
+class ChhattisgarhScraper(PlaywrightScraper):
+    CODE = "CG"
+
+    def scrape(self):
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        with self.browser_page() as page:
+            page.goto(URL)
+            page.wait_for_load_state("networkidle")
+            page.wait_for_function(
+                "() => window.$ && $.fn.dataTable && "
+                "$.fn.dataTable.isDataTable('#ContentPlaceHolder1_gv_ProjectList') && "
+                "$('#ContentPlaceHolder1_gv_ProjectList').DataTable().rows().count() > 0",
+                timeout=60000)
+            rows = page.evaluate("""function(){
+                function clean(h){ var d=document.createElement('div'); d.innerHTML=h;
+                    return d.textContent.trim(); }
+                var dt = $('#ContentPlaceHolder1_gv_ProjectList').DataTable();
+                return dt.rows().data().toArray().map(function(r){ return {
+                    name: clean(r[1]), reg: clean(r[2]), authorised: clean(r[3]),
+                    promoter: clean(r[4]), ptype: clean(r[5]), district: clean(r[6]),
+                    tehsil: clean(r[7]), approved: clean(r[8]), end: clean(r[9]),
+                    status: clean(r[12] || '') }; });
+            }""")
+        seen = set()
+        for r in rows:
+            key = r.get("reg")
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            yield Project(
+                state="Chhattisgarh",
+                rera_reg_no=r.get("reg", ""),
+                project_name=r.get("name", ""),
+                promoter_name=r.get("promoter") or r.get("authorised", ""),
+                district=r.get("district", ""),
+                locality=r.get("tehsil", ""),
+                project_type=r.get("ptype", ""),
+                status=r.get("status") or "Registered",
+                approved_on=r.get("approved", ""),
+                proposed_completion=r.get("end", ""),
+                source_url=URL, scraped_at=now, extra=r,
+            )

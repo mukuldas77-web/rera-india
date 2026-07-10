@@ -1,28 +1,32 @@
-"""Maps portal codes to scraper classes. Add new states here."""
-from .scrapers.maharashtra import MaharashtraScraper
-from .scrapers.telangana import TelanganaScraper
-from .scrapers.karnataka import KarnatakaScraper
-from .scrapers.gujarat import GujaratScraper
-from .scrapers.odisha import OdishaScraper
-from .scrapers.uttar_pradesh import UttarPradeshScraper
-from .scrapers.haryana_gurugram import HaryanaGurugramScraper
-from .scrapers.tamil_nadu import TamilNaduScraper
+"""Auto-discovering scraper registry.
 
-SCRAPERS = {
-    "MH": MaharashtraScraper,
-    "TG": TelanganaScraper,
-    "KA": KarnatakaScraper,
-    "GJ": GujaratScraper,
-    "OD": OdishaScraper,
-    "UP": UttarPradeshScraper,
-    "HR-GGM": HaryanaGurugramScraper,
-    "TN": TamilNaduScraper,
-}
+Every module in rera_scraper/scrapers/ that defines a BaseScraper subclass with
+a CODE attribute is registered automatically. To add a state, drop a new module
+in scrapers/ (or add a class to an existing one) - no edits here needed.
+"""
+import importlib
+import pkgutil
+
+from .base import BaseScraper
+from . import scrapers as _scrapers_pkg
+
+SCRAPERS = {}
+
+for _info in pkgutil.iter_modules(_scrapers_pkg.__path__):
+    if _info.name.startswith("_"):
+        continue
+    try:
+        _mod = importlib.import_module("." + "scrapers." + _info.name, __package__)
+    except Exception:
+        continue
+    for _attr in dir(_mod):
+        _obj = getattr(_mod, _attr)
+        if (isinstance(_obj, type) and issubclass(_obj, BaseScraper)
+                and _obj is not BaseScraper and getattr(_obj, "CODE", None)):
+            SCRAPERS[_obj.CODE] = _obj
 
 
-def get_scraper(code: str):
+def get_scraper(code):
     if code not in SCRAPERS:
-        raise KeyError(
-            f"No scraper implemented for '{code}' yet. Implemented: {sorted(SCRAPERS)}. "
-            "See portals.json for portal metadata and README for how to add one.")
+        raise KeyError("No scraper for " + str(code) + ". Available: " + str(sorted(SCRAPERS)))
     return SCRAPERS[code]()

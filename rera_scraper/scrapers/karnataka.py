@@ -1,48 +1,75 @@
-"""K-RERA (Karnataka) — Java/Spring app, project list behind POST form.
+"""K-RERA (Karnataka) - validated live July 2026.
 
-https://rera.karnataka.gov.in/viewAllProjects
-Strategy: load form, iterate district options, submit, paginate result table.
+Public project list at https://rera.karnataka.gov.in/viewAllProjects is a form
+with a District dropdown. Selecting a district + Search POSTs and reloads at
+/projectViewDetails rendering a jQuery DataTable of ALL that district's
+projects. We iterate every district and read the full result set straight from
+the DataTable API (no pagination clicks). Bengaluru Urban alone ~4,300 rows.
 """
 from datetime import datetime, timezone
 
 from ..base import PlaywrightScraper
 from ..models import Project
 
+SEARCH_URL = "https://rera.karnataka.gov.in/viewAllProjects"
+
 
 class KarnatakaScraper(PlaywrightScraper):
     CODE = "KA"
+    DISTRICTS = None            # None = all districts
+    STATUS_FILTER = {"APPROVED"}  # registered projects only
 
     def scrape(self):
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        url = self.portal["search_url"]
+        seen = set()
         with self.browser_page() as page:
-            page.goto(url)
+            page.goto(SEARCH_URL)
             page.wait_for_load_state("networkidle")
-            district_sel = "select#projectDist, select[name=district]"
-            options = page.eval_on_selector_all(
-                f"{district_sel} option", "els => els.map(e => e.value).filter(v => v)")
-            for value in options:
-                page.goto(url)
-                page.select_option(district_sel, value=value)
-                page.click("input[type=submit], button[type=submit]")
-                page.wait_for_load_state("networkidle")
-                while True:
-                    for row in self.extract_table(page):
-                        get = lambda *ks: next((row[k] for k in ks if k in row and row[k]), "")
-                        yield Project(
-                            state="Karnataka",
-                            rera_reg_no=get("Registration Number", "Acknowledgement Number", "Reg No"),
-                            project_name=get("Project Name"),
-                            promoter_name=get("Promoter Name"),
-                            district=get("District"),
-                            project_type=get("Project Type"),
-                            status=get("Status") or "Registered",
-                            approved_on=get("Approved Date", "Registration Date"),
-                            proposed_completion=get("Completion Date", "Proposed Completion Date"),
-                            source_url=url, scraped_at=now, extra=row,
-                        )
-                    nxt = page.query_selector("a:has-text('Next'):not(.disabled)")
-                    if not nxt:
-                        break
-                    nxt.click()
-                    page.wait_for_load_state("networkidle")
+            districts = self.DISTRICTS or page.eval_on_selector_all(
+                "select[name=district] option",
+                "els => els.map(function(e){return e.value;}).filter(function(v){return v && v !== '0';})")
+            for dist in districts:
+                try:
+                    rows = self._fetch_district(page, dist)
+                except Exception:
+                    continue
+                for r in rows:
+                    status = (r.get("status") or "").split(" ")[0].upper()
+                    if self.STATUS_FILTER and status not in self.STATUS_FILTER:
+                        continue
+                    key = r.get("reg") or r.get("ack")
+                    if not key or key in seen:
+                        continue
+                    seen.add(key)
+                    yield Project(
+                        state="Karnataka",
+                        rera_reg_no=r.get("reg") or r.get("ack") or "",
+                        project_name=r.get("name", ""),
+                        promoter_name=r.get("promoter", ""),
+                        district=r.get("district", "") or dist,
+                        locality=r.get("taluk", ""),
+                        project_type=r.get("ptype", ""),
+                        status="Registered" if status == "APPROVED" else status.title(),
+                        approved_on=r.get("approved", ""),
+                        proposed_completion=r.get("completion", ""),
+                        source_url=SEARCH_URL, scraped_at=now, extra=r,
+                    )
+
+    def _fetch_district(self, page, district):
+        page.goto(SEARCH_URL)
+        page.wait_for_load_state("networkidle")
+        page.select_option("select[name=district]", value=district)
+        page.click("button:has-text('Search'), input[type=submit]")
+        page.wait_for_load_state("networkidle")
+        page.wait_for_timeout(1500)
+        return page.evaluate("""function(){
+            if (!(window.$ && $.fn && $.fn.dataTable)) return [];
+            function clean(h){ var d=document.createElement('div'); d.innerHTML=h;
+                return d.textContent.trim(); }
+            var dt = $('table').DataTable();
+            return dt.rows().data().toArray().map(function(r){ return {
+                ack: clean(r[1]), reg: clean(r[2]), promoter: clean(r[4]),
+                name: clean(r[5]), status: clean(r[6]), district: clean(r[7]),
+                taluk: clean(r[8]), ptype: clean(r[9]), approved: clean(r[11]),
+                completion: clean(r[12] || '') }; });
+        }""")

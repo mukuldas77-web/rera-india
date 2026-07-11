@@ -10,6 +10,7 @@ Run locally (needs the scraper deps + browsers):
 """
 import io
 import sys
+import time as _time
 from pathlib import Path
 
 import pandas as pd
@@ -35,6 +36,7 @@ class Req(BaseModel):
 
 @app.post("/api/scrape")
 def scrape(req: Req):
+    t0 = _time.time()
     try:
         rows = UniversalScraper(req.url, mode=req.mode, engine=req.engine,
                                 stealth=req.stealth, max_pages=req.pages,
@@ -43,7 +45,8 @@ def scrape(req: Req):
         return JSONResponse({"error": str(e)}, status_code=400)
     _last["rows"] = rows
     cols = list({k for r in rows for k in r})
-    return {"count": len(rows), "columns": cols, "rows": rows[:500]}
+    return {"count": len(rows), "columns": cols, "rows": rows[:500],
+            "seconds": round(_time.time() - t0, 1)}
 
 
 @app.get("/api/download")
@@ -110,7 +113,9 @@ HTML = """<!doctype html><html><head><meta charset="utf-8">
 <script>
 const $=id=>document.getElementById(id);
 async function run(){
- $('status').textContent='Scraping... (this can take a while for many pages / coordinates)';
+ let _t0=Date.now(); if(window._tk)clearInterval(window._tk);
+ window._tk=setInterval(function(){$('status').textContent='Scraping... '+Math.round((Date.now()-_t0)/1000)+'s elapsed';},1000);
+ $('status').textContent='Scraping... 0s elapsed';
  $('out').innerHTML='';
  document.getElementById('csvbtn').disabled=true; document.getElementById('xlsxbtn').disabled=true;
  try{
@@ -118,15 +123,16 @@ async function run(){
     body:JSON.stringify({url:$('url').value,mode:$('mode').value,engine:$('engine').value,
       stealth:$('stealth').checked,pages:parseInt($('pages').value)||50,resolve_coords:$('coords').checked})});
   const d=await r.json();
+  if(window._tk)clearInterval(window._tk);
   if(d.error){$('status').innerHTML='<span class="err">Error: '+d.error+'</span>';return;}
-  $('status').innerHTML='<b style="color:#6ee7b7">✓ Scraping done</b> — '+d.count+' rows'+(d.count>500?' (showing first 500; full set is in the download)':'');
+  $('status').innerHTML='<b style="color:#6ee7b7">✓ Scraping done</b> — '+d.count+' rows in '+d.seconds+'s'+(d.count>500?' (showing first 500; full set is in the download)':'');
   document.getElementById('csvbtn').disabled=false; document.getElementById('xlsxbtn').disabled=false;
   if(!d.rows.length){$('out').innerHTML='<p class="mut">No rows found. Try engine=dynamic or check the URL.</p>';return;}
   const cols=d.columns;
   let h='<table><thead><tr>'+cols.map(c=>'<th>'+c+'</th>').join('')+'</tr></thead><tbody>';
   h+=d.rows.map(r=>'<tr>'+cols.map(c=>'<td>'+((r[c]??'')+'').replace(/</g,'&lt;')+'</td>').join('')+'</tr>').join('');
   $('out').innerHTML=h+'</tbody></table>';
- }catch(e){$('status').innerHTML='<span class="err">'+e+'</span>';}
+ }catch(e){if(window._tk)clearInterval(window._tk);$('status').innerHTML='<span class="err">'+e+'</span>';}
 }
 function dl(){window.location='/api/download';}
 function dlcsv(){window.location='/api/download.csv';}

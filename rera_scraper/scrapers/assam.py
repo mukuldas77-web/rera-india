@@ -19,11 +19,16 @@ MAX_PAGES = 500
 
 
 def _pick_table(soup):
+    # Two tables share the same header (an empty header-only one and the real
+    # data table); pick the one that actually has the most rows.
+    best, best_n = None, 0
     for t in soup.find_all("table"):
         head = " ".join(th.get_text(" ", strip=True) for th in t.find_all("th"))
         if "Registration Certificate Number" in head:
-            return t
-    return None
+            n = len(t.find_all("tr"))
+            if n > best_n:
+                best, best_n = t, n
+    return best
 
 
 class AssamScraper(BaseScraper):

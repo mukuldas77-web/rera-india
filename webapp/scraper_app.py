@@ -7,7 +7,6 @@ Run locally (needs the scraper deps + browsers):
     pip install --user fastapi "uvicorn[standard]" pandas openpyxl beautifulsoup4 "scrapling[fetchers]"
     python -m playwright install chromium
     python -m uvicorn webapp.scraper_app:app --port 8010   # from the repo root
-    # open http://localhost:8010
 """
 import io
 import sys
@@ -31,13 +30,15 @@ class Req(BaseModel):
     engine: str = "auto"
     stealth: bool = False
     pages: int = 50
+    resolve_coords: bool = False
 
 
 @app.post("/api/scrape")
 def scrape(req: Req):
     try:
         rows = UniversalScraper(req.url, mode=req.mode, engine=req.engine,
-                                stealth=req.stealth, max_pages=req.pages).scrape()
+                                stealth=req.stealth, max_pages=req.pages,
+                                resolve_coords=req.resolve_coords).scrape()
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     _last["rows"] = rows
@@ -97,24 +98,25 @@ HTML = """<!doctype html><html><head><meta charset="utf-8">
    <select id="engine"><option value="auto">auto engine</option><option value="static">static (fast)</option><option value="dynamic">dynamic (browser)</option></select>
    <select id="mode"><option value="auto">auto mode</option><option value="single">single page</option><option value="paged">paged</option></select>
    <label class="mut"><input type="checkbox" id="stealth"> anti-bot</label>
+   <label class="mut" title="follow each location link and read exact lat/long (slower)"><input type="checkbox" id="coords"> get lat/long</label>
    <input id="pages" type="number" value="50" style="width:90px" title="max pages">
    <button onclick="run()">Scrape</button>
    <button class="ghost" id="csvbtn" onclick="dlcsv()" disabled>Download CSV</button>
    <button class="ghost" id="xlsxbtn" onclick="dl()" disabled>Download .xlsx</button>
  </div>
- <div id="status" class="mut">Enter a listing URL and click Scrape. JS-heavy sites: choose "dynamic".</div>
+ <div id="status" class="mut">Enter a listing URL and click Scrape. JS-heavy sites: choose "dynamic". Tick "get lat/long" for coordinates.</div>
  <div id="out"></div>
 </div>
 <script>
 const $=id=>document.getElementById(id);
 async function run(){
- $('status').textContent='Scraping... (this can take a while for many pages)';
+ $('status').textContent='Scraping... (this can take a while for many pages / coordinates)';
  $('out').innerHTML='';
  document.getElementById('csvbtn').disabled=true; document.getElementById('xlsxbtn').disabled=true;
  try{
   const r=await fetch('/api/scrape',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({url:$('url').value,mode:$('mode').value,engine:$('engine').value,
-      stealth:$('stealth').checked,pages:parseInt($('pages').value)||50})});
+      stealth:$('stealth').checked,pages:parseInt($('pages').value)||50,resolve_coords:$('coords').checked})});
   const d=await r.json();
   if(d.error){$('status').innerHTML='<span class="err">Error: '+d.error+'</span>';return;}
   $('status').innerHTML='<b style="color:#6ee7b7">✓ Scraping done</b> — '+d.count+' rows'+(d.count>500?' (showing first 500; full set is in the download)':'');

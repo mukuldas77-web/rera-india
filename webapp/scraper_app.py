@@ -5,7 +5,7 @@ engine behind a small FastAPI UI.
 
 Run locally (needs the scraper deps + browsers):
     pip install --user fastapi "uvicorn[standard]" pandas openpyxl beautifulsoup4 "scrapling[fetchers]"
-    python -m scrapling install
+    python -m playwright install chromium
     python -m uvicorn webapp.scraper_app:app --port 8010   # from the repo root
     # open http://localhost:8010
 """
@@ -58,6 +58,16 @@ def download():
         headers={"Content-Disposition": "attachment; filename=scraped.xlsx"})
 
 
+@app.get("/api/download.csv")
+def download_csv():
+    rows = _last["rows"]
+    df = pd.DataFrame(rows if rows else [{"info": "no data"}])
+    csv_text = df.to_csv(index=False)
+    return StreamingResponse(
+        io.BytesIO(csv_text.encode("utf-8-sig")), media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=scraped.csv"})
+
+
 @app.get("/", response_class=HTMLResponse)
 def index():
     return HTML
@@ -89,7 +99,8 @@ HTML = """<!doctype html><html><head><meta charset="utf-8">
    <label class="mut"><input type="checkbox" id="stealth"> anti-bot</label>
    <input id="pages" type="number" value="50" style="width:90px" title="max pages">
    <button onclick="run()">Scrape</button>
-   <button class="ghost" onclick="dl()">Download .xlsx</button>
+   <button class="ghost" id="csvbtn" onclick="dlcsv()" disabled>Download CSV</button>
+   <button class="ghost" id="xlsxbtn" onclick="dl()" disabled>Download .xlsx</button>
  </div>
  <div id="status" class="mut">Enter a listing URL and click Scrape. JS-heavy sites: choose "dynamic".</div>
  <div id="out"></div>
@@ -99,13 +110,15 @@ const $=id=>document.getElementById(id);
 async function run(){
  $('status').textContent='Scraping... (this can take a while for many pages)';
  $('out').innerHTML='';
+ document.getElementById('csvbtn').disabled=true; document.getElementById('xlsxbtn').disabled=true;
  try{
   const r=await fetch('/api/scrape',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({url:$('url').value,mode:$('mode').value,engine:$('engine').value,
       stealth:$('stealth').checked,pages:parseInt($('pages').value)||50})});
   const d=await r.json();
   if(d.error){$('status').innerHTML='<span class="err">Error: '+d.error+'</span>';return;}
-  $('status').textContent=d.count+' rows scraped'+(d.count>500?' (showing first 500)':'');
+  $('status').innerHTML='<b style="color:#6ee7b7">✓ Scraping done</b> — '+d.count+' rows'+(d.count>500?' (showing first 500; full set is in the download)':'');
+  document.getElementById('csvbtn').disabled=false; document.getElementById('xlsxbtn').disabled=false;
   if(!d.rows.length){$('out').innerHTML='<p class="mut">No rows found. Try engine=dynamic or check the URL.</p>';return;}
   const cols=d.columns;
   let h='<table><thead><tr>'+cols.map(c=>'<th>'+c+'</th>').join('')+'</tr></thead><tbody>';
@@ -114,5 +127,6 @@ async function run(){
  }catch(e){$('status').innerHTML='<span class="err">'+e+'</span>';}
 }
 function dl(){window.location='/api/download';}
+function dlcsv(){window.location='/api/download.csv';}
 $('url').addEventListener('keydown',e=>{if(e.key==='Enter')run();});
 </script></body></html>"""

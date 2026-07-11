@@ -8,12 +8,11 @@ minimal (often zero) configuration, using Scrapling for resilience:
   - adaptive=True  : selectors that survive website redesigns
 
 Install once (on the machine / CI that runs it):
-    pip install -r requirements-universal.txt
+    pip install "scrapling[fetchers]"
     scrapling install            # downloads the browser binaries
 
 Usage (CLI):
     python -m rera_scraper.universal "https://site/list" --mode auto --pages 200
-    python -m rera_scraper.universal "https://site/list?page={page}" --mode paged
 Usage (library):
     from rera_scraper.universal import UniversalScraper
     rows = UniversalScraper("https://site/list").scrape()   # -> list[dict]
@@ -23,6 +22,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import re as _re
 import sys
 import time
 
@@ -40,8 +40,6 @@ def _fetch(url, engine="auto", stealth=False, network_idle=True):
     if engine == "dynamic":
         DynamicFetcher.adaptive = True
         return DynamicFetcher.fetch(url, headless=True, network_idle=network_idle)
-
-    # auto: try fast static first, fall back to a real browser if it looks empty
     try:
         Fetcher.adaptive = True
         page = Fetcher.get(url, stealthy_headers=True)
@@ -54,7 +52,6 @@ def _fetch(url, engine="auto", stealth=False, network_idle=True):
 
 
 def _biggest_table(page):
-    """Return the <table> element with the most data rows (Scrapling element)."""
     best, best_n = None, 0
     for t in page.css("table"):
         n = len(t.css("tr"))
@@ -68,8 +65,32 @@ def _count_rows(page):
     return len(t.css("tbody tr") or t.css("tr")) if t else 0
 
 
+# matches "lat,lng" inside google-maps-style links (q=, ll=, @lat,lng)
+_COORD_RE = _re.compile(r"(-?\d{1,3}\.\d{3,})[ ,/]+(-?\d{1,3}\.\d{3,})")
+
+
+def _coords_from_links(hrefs):
+    """Pull (lat, lng) out of any google-maps-ish URL in the row's links."""
+    for h in hrefs:
+        if not h:
+            continue
+        u = h.replace("%2C", ",").replace("%20", " ")
+        low = u.lower()
+        if ("map" not in low and "@" not in u and "q=" not in low
+                and "ll=" not in low):
+            continue
+        m = _COORD_RE.search(u)
+        if m:
+            lat, lng = float(m.group(1)), float(m.group(2))
+            if -90 <= lat <= 90 and -180 <= lng <= 180:
+                return str(lat), str(lng)
+    return "", ""
+
+
 def _table_to_rows(table):
-    """Extract a table as list[dict] using header cells as keys."""
+    """Extract a table as list[dict], keyed by header cells. For link cells,
+    also capture the real href (so a 'View Location' button becomes the actual
+    URL), and auto-extract lat/long from any map link."""
     headers = ([h.get_all_text(strip=True) for h in table.css("thead th")]
                or [h.get_all_text(strip=True) for h in table.css("tr th")])
     body = table.css("tbody tr") or table.css("tr")
@@ -78,18 +99,22 @@ def _table_to_rows(table):
         cells = tr.css("td")
         if not cells:
             continue
-        vals = [c.get_all_text(strip=True) for c in cells]
-        if headers and len(headers) == len(vals):
-            rows.append({headers[i] or ("col" + str(i)): vals[i] for i in range(len(vals))})
-        else:
-            rows.append({("col" + str(i)): v for i, v in enumerate(vals)})
+        rec, hrefs = {}, []
+        for i, c in enumerate(cells):
+            key = headers[i] if (headers and i < len(headers) and headers[i]) else ("col" + str(i))
+            rec[key] = c.get_all_text(strip=True)
+            href = c.css("a::attr(href)").get()
+            if href and href.strip() not in ("#", "javascript:;", "javascript:void(0)"):
+                rec[key + " URL"] = href.strip()
+                hrefs.append(href.strip())
+        lat, lng = _coords_from_links(hrefs)
+        if lat:
+            rec["latitude"], rec["longitude"] = lat, lng
+        rows.append(rec)
     return rows
 
 
 class UniversalScraper:
-    """Config-optional scraper. In auto mode it just finds the biggest table
-    and paginates by incrementing a {page} placeholder or a ?page= param."""
-
     def __init__(self, url, mode="auto", page_param="page", max_pages=500,
                  engine="auto", stealth=False, rate_limit=1.0):
         self.url = url
@@ -154,14 +179,13 @@ class UniversalScraper:
 
 def main():
     ap = argparse.ArgumentParser(description="Universal Scrapling listing scraper")
-    ap.add_argument("url", help="listing URL (use {page} where the page number goes)")
+    ap.add_argument("url")
     ap.add_argument("--mode", default="auto", choices=["auto", "single", "paged"])
     ap.add_argument("--engine", default="auto", choices=["auto", "static", "dynamic"])
-    ap.add_argument("--stealth", action="store_true", help="use anti-bot StealthyFetcher")
+    ap.add_argument("--stealth", action="store_true")
     ap.add_argument("--pages", type=int, default=500)
     ap.add_argument("--out", default="output.csv")
     args = ap.parse_args()
-
     rows = UniversalScraper(args.url, mode=args.mode, engine=args.engine,
                             stealth=args.stealth, max_pages=args.pages).scrape()
     print("scraped " + str(len(rows)) + " rows", file=sys.stderr)

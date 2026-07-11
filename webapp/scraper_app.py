@@ -93,6 +93,11 @@ HTML = """<!doctype html><html><head><meta charset="utf-8">
  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap;max-width:320px;overflow:hidden;text-overflow:ellipsis}
  th{color:var(--mut);position:sticky;top:0;background:#243247}
  .mut{color:var(--mut)}.err{color:#f87171}
+ code{background:#0b1220;padding:1px 6px;border-radius:4px;font-size:12px}
+ details.help{margin:6px 0 16px;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px}
+ details.help summary{cursor:pointer;font-weight:700;color:var(--acc)}
+ .helpgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px;margin-top:12px}
+ .helpgrid div{line-height:1.5}
 </style></head><body>
 <header><h1>Universal Scraper - paste a URL, get a table</h1></header>
 <div class="wrap">
@@ -107,6 +112,18 @@ HTML = """<!doctype html><html><head><meta charset="utf-8">
    <button class="ghost" id="csvbtn" onclick="dlcsv()" disabled>Download CSV</button>
    <button class="ghost" id="xlsxbtn" onclick="dl()" disabled>Download .xlsx</button>
  </div>
+ <details class="help" open>
+  <summary>What do these options mean? (click to hide)</summary>
+  <div class="helpgrid">
+    <div><b>URL</b><br><span class="mut">Paste any listing/table page. If results span multiple pages, put <code>{page}</code> where the page number goes (e.g. <code>?page={page}</code>) and choose <b>paged</b> mode.</span></div>
+    <div><b>Engine</b><br><span class="mut"><b>auto</b> - tries fast first, upgrades to a browser if needed (good default).<br><b>static (fast)</b> - plain HTML, no browser; best for simple server-rendered tables.<br><b>dynamic (browser)</b> - runs a real browser; use when static returns nothing (JavaScript / DataTable sites).</span></div>
+    <div><b>Mode</b><br><span class="mut"><b>auto</b> - detects single vs multi-page.<br><b>single page</b> - one page / one table that loads all rows at once.<br><b>paged</b> - follows page 1, 2, 3... Use whenever the URL has <code>{page}</code>.</span></div>
+    <div><b>anti-bot</b><br><span class="mut">Uses a stealth browser to get past bot-detection / Cloudflare. Slower - turn on only if a site blocks normal scraping.</span></div>
+    <div><b>get lat/long</b><br><span class="mut">Follows each row&#39;s location link and reads the exact coordinates, adding <b>latitude</b> / <b>longitude</b> columns. Much slower (one extra request per row) - best for up to a few hundred rows.</span></div>
+    <div><b>pages</b><br><span class="mut">Max pages to fetch in paged mode. Raise it for the full dataset, lower it for a quick test.</span></div>
+    <div><b>Download CSV / .xlsx</b><br><span class="mut">Exports everything scraped - not just the first 500 shown in the table.</span></div>
+  </div>
+</details>
  <div id="status" class="mut">Enter a listing URL and click Scrape. JS-heavy sites: choose "dynamic". Tick "get lat/long" for coordinates.</div>
  <div id="out"></div>
 </div>

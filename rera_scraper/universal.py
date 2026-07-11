@@ -74,13 +74,22 @@ def _coords_from_links(hrefs):
 
 
 def _html_of(page):
-    for attr in ("html_content", "body", "content", "text"):
+    """Gather the fullest text of a page, INCLUDING <script> contents (that is
+    where map coordinates usually live)."""
+    parts = []
+    for attr in ("html_content", "body", "content"):
         v = getattr(page, attr, None)
         if isinstance(v, bytes):
-            return v.decode("utf-8", "ignore")
-        if isinstance(v, str) and len(v) > 50:
-            return v
-    return str(page)
+            v = v.decode("utf-8", "ignore")
+        if isinstance(v, str) and len(v) > 30:
+            parts.append(v)
+    try:
+        parts += [x for x in page.css("script::text").getall() if isinstance(x, str)]
+    except Exception:
+        pass
+    if not parts:
+        parts.append(str(page))
+    return " ".join(parts)
 
 
 def _resolve_coords(url):

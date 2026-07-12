@@ -32,6 +32,7 @@ class Req(BaseModel):
     stealth: bool = False
     pages: int = 50
     resolve_coords: bool = False
+    deep: bool = False
 
 
 @app.post("/api/scrape")
@@ -40,7 +41,7 @@ def scrape(req: Req):
     try:
         rows = UniversalScraper(req.url, mode=req.mode, engine=req.engine,
                                 stealth=req.stealth, max_pages=req.pages,
-                                resolve_coords=req.resolve_coords).scrape()
+                                resolve_coords=req.resolve_coords, deep=req.deep).scrape()
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     _last["rows"] = rows
@@ -107,6 +108,7 @@ HTML = """<!doctype html><html><head><meta charset="utf-8">
    <select id="mode"><option value="auto">auto mode</option><option value="single">single page</option><option value="paged">paged</option></select>
    <label class="mut"><input type="checkbox" id="stealth"> anti-bot</label>
    <label class="mut" title="follow each location link and read exact lat/long (slower)"><input type="checkbox" id="coords"> get lat/long</label>
+   <label class="mut" title="open each project profile page and grab ALL fields incl. real coordinates, builder, contact (slowest)"><input type="checkbox" id="deep"> deep dive</label>
    <input id="pages" type="number" value="50" style="width:90px" title="max pages">
    <button onclick="run()">Scrape</button>
    <button class="ghost" id="csvbtn" onclick="dlcsv()" disabled>Download CSV</button>
@@ -119,6 +121,7 @@ HTML = """<!doctype html><html><head><meta charset="utf-8">
     <div><b>Engine</b><br><span class="mut"><b>auto</b> - tries fast first, upgrades to a browser if needed (good default).<br><b>static (fast)</b> - plain HTML, no browser; best for simple server-rendered tables.<br><b>dynamic (browser)</b> - runs a real browser; use when static returns nothing (JavaScript / DataTable sites).</span></div>
     <div><b>Mode</b><br><span class="mut"><b>auto</b> - detects single vs multi-page.<br><b>single page</b> - one page / one table that loads all rows at once.<br><b>paged</b> - follows page 1, 2, 3... Use whenever the URL has <code>{page}</code>.</span></div>
     <div><b>anti-bot</b><br><span class="mut">Uses a stealth browser to get past bot-detection / Cloudflare. Slower - turn on only if a site blocks normal scraping.</span></div>
+    <div><b>deep dive</b><br><span class="mut">Opens each project&#39;s profile/detail page and grabs <b>every field</b> on it - builder name, contact, PAN, email, permit dates, and the <b>real coordinates</b> (converted to decimal lat/long). Slowest (one page per project) but the richest data.</span></div>
     <div><b>get lat/long</b><br><span class="mut">Follows each row&#39;s location link and reads the exact coordinates, adding <b>latitude</b> / <b>longitude</b> columns. Much slower (one extra request per row) - best for up to a few hundred rows.</span></div>
     <div><b>pages</b><br><span class="mut">Max pages to fetch in paged mode. Raise it for the full dataset, lower it for a quick test.</span></div>
     <div><b>Download CSV / .xlsx</b><br><span class="mut">Exports everything scraped - not just the first 500 shown in the table.</span></div>
@@ -138,7 +141,7 @@ async function run(){
  try{
   const r=await fetch('/api/scrape',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({url:$('url').value,mode:$('mode').value,engine:$('engine').value,
-      stealth:$('stealth').checked,pages:parseInt($('pages').value)||50,resolve_coords:$('coords').checked})});
+      stealth:$('stealth').checked,pages:parseInt($('pages').value)||50,resolve_coords:$('coords').checked,deep:$('deep').checked})});
   const d=await r.json();
   if(window._tk)clearInterval(window._tk);
   if(d.error){$('status').innerHTML='<span class="err">Error: '+d.error+'</span>';return;}

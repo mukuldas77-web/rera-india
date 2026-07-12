@@ -134,9 +134,66 @@ def _table_to_rows(table):
     return rows
 
 
+_DMS_RE = _re.compile(r"(\d{1,3})[^\d]+(\d{1,2})[^\d]+(\d{1,2}(?:\.\d+)?)[^\dNSEWnsew]*([NSEW])", _re.I)
+
+
+def _dms_to_dec(text):
+    """Convert '23 deg 21 min 21 sec N' style coordinates to decimal degrees."""
+    m = _DMS_RE.search(text or "")
+    if not m:
+        d = _re.search(r"-?\d{1,3}\.\d{3,}", text or "")
+        return d.group(0) if d else ""
+    deg, minu, sec, hemi = float(m.group(1)), float(m.group(2)), float(m.group(3)), m.group(4).upper()
+    dec = deg + minu / 60.0 + sec / 3600.0
+    if hemi in ("S", "W"):
+        dec = -dec
+    return str(round(dec, 6))
+
+
+def _detail_pairs(html):
+    """Extract {label: value} pairs from a detail/profile page (bootstrap
+    label+col, th/td, dt/dd layouts)."""
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(html, "html.parser")
+    pairs = {}
+
+    def clean(el):
+        return " ".join(el.get_text(" ", strip=True).split()) if el else ""
+
+    for lb in soup.find_all("label"):
+        key = clean(lb)
+        if not key or len(key) > 45:
+            continue
+        col = lb.find_parent(class_=lambda c: c and "col-" in " ".join(c if isinstance(c, list) else [c]))
+        val = ""
+        if col is not None:
+            nx = col.find_next_sibling()
+            if nx is not None:
+                val = clean(nx)
+        if val and val != key and len(val) < 300:
+            pairs.setdefault(key, val)
+
+    for th in soup.find_all(["th", "dt"]):
+        key = clean(th)
+        sib = th.find_next_sibling(["td", "dd"])
+        if key and sib is not None and len(key) < 45:
+            val = clean(sib)
+            if val and val != key and len(val) < 300:
+                pairs.setdefault(key, val)
+    return pairs
+
+
+def _fetch_detail_html(url):
+    from scrapling.fetchers import Fetcher
+    try:
+        return _html_of(Fetcher.get(url, stealthy_headers=True))
+    except Exception:
+        return ""
+
+
 class UniversalScraper:
     def __init__(self, url, mode="auto", page_param="page", max_pages=500,
-                 engine="auto", stealth=False, rate_limit=1.0, resolve_coords=False):
+                 engine="auto", stealth=False, rate_limit=1.0, resolve_coords=False, deep=False):
         self.url = url
         self.mode = mode
         self.page_param = page_param
@@ -145,6 +202,7 @@ class UniversalScraper:
         self.stealth = stealth
         self.rate_limit = rate_limit
         self.resolve_coords = resolve_coords
+        self.deep = deep
 
     def _page_url(self, n):
         if "{page}" in self.url:
@@ -154,9 +212,35 @@ class UniversalScraper:
 
     def scrape(self):
         rows = self._scrape_raw()
-        if self.resolve_coords:
+        if self.deep:
+            self._deep(rows)
+        elif self.resolve_coords:
             self._resolve(rows)
         return rows
+
+    def _deep(self, rows):
+        cache = {}
+        for r in rows:
+            durl = next((v for k, v in list(r.items())
+                         if k.endswith("URL") and any(w in str(v).lower()
+                         for w in ("profile", "detail", "projectprofile", "viewproject"))), None)
+            if not durl:
+                continue
+            absu = urljoin(self.url, durl)
+            pairs = cache.get(absu)
+            if pairs is None:
+                pairs = _detail_pairs(_fetch_detail_html(absu))
+                cache[absu] = pairs
+                time.sleep(0.3)
+            for k, v in pairs.items():
+                if k not in r:
+                    r[k] = v
+            for k, v in pairs.items():
+                kl = k.lower()
+                if "latitude" in kl and not r.get("latitude"):
+                    r["latitude"] = _dms_to_dec(v)
+                if "longitude" in kl and not r.get("longitude"):
+                    r["longitude"] = _dms_to_dec(v)
 
     def _resolve(self, rows):
         seen = {}

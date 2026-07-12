@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
+import os
 import re as _re
 import sys
 import time
@@ -134,6 +136,14 @@ def _table_to_rows(table):
     return rows
 
 
+RUNS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "runs")
+
+
+def _run_id(url, mode, engine, deep, resolve_coords):
+    key = "|".join([url, mode, engine, str(deep), str(resolve_coords)])
+    return hashlib.md5(key.encode("utf-8")).hexdigest()[:12]
+
+
 _DMS_RE = _re.compile(r"(\d{1,3})[^\d]+(\d{1,2})[^\d]+(\d{1,2}(?:\.\d+)?)[^\dNSEWnsew]*([NSEW])", _re.I)
 
 
@@ -192,7 +202,7 @@ def _fetch_detail_html(url):
 
 class UniversalScraper:
     def __init__(self, url, mode="auto", page_param="page", max_pages=500,
-                 engine="auto", stealth=False, rate_limit=1.0, resolve_coords=False, deep=False):
+                 engine="auto", stealth=False, rate_limit=1.0, resolve_coords=False, deep=False, checkpoint=True):
         self.url = url
         self.mode = mode
         self.page_param = page_param
@@ -202,6 +212,10 @@ class UniversalScraper:
         self.rate_limit = rate_limit
         self.resolve_coords = resolve_coords
         self.deep = deep
+        self.checkpoint = checkpoint
+        self.run_id = _run_id(url, mode, engine, deep, resolve_coords)
+        self._cp_path = os.path.join(RUNS_DIR, self.run_id + ".json")
+        self._cp = None
 
     def _page_url(self, n):
         if "{page}" in self.url:
@@ -209,17 +223,49 @@ class UniversalScraper:
         sep = "&" if "?" in self.url else "?"
         return self.url + sep + self.page_param + "=" + str(n)
 
+    def _save_cp(self, data):
+        if not self.checkpoint:
+            return
+        try:
+            os.makedirs(RUNS_DIR, exist_ok=True)
+            tmp = self._cp_path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False)
+            os.replace(tmp, self._cp_path)
+        except Exception:
+            pass
+
+    def _load_cp(self):
+        try:
+            with open(self._cp_path, encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return None
+
     def scrape(self):
+        self._cp = self._load_cp() if self.checkpoint else None
+        if self._cp and self._cp.get("stage") == "done":
+            return self._cp.get("rows", [])
         rows = self._scrape_raw()
         if self.deep:
             self._deep(rows)
         elif self.resolve_coords:
             self._resolve(rows)
+        self._save_cp({"stage": "done", "url": self.url, "rows": rows})
         return rows
 
     def _deep(self, rows):
+        cp = self._cp
+        start_idx = 0
+        if cp and cp.get("stage") == "deep" and cp.get("url") == self.url:
+            saved = cp.get("rows")
+            if saved and len(saved) == len(rows):
+                rows[:] = saved
+            start_idx = cp.get("deep_index", 0)
+            self._cp = None
         cache = {}
-        for r in rows:
+        for _i in range(start_idx, len(rows)):
+            r = rows[_i]
             durl = next((v for k, v in list(r.items())
                          if k.endswith("URL") and any(w in str(v).lower()
                          for w in ("profile", "detail", "projectprofile", "viewproject"))), None)
@@ -240,6 +286,8 @@ class UniversalScraper:
                     r["latitude"] = _dms_to_dec(v)
                 if "longitude" in kl and not r.get("longitude"):
                     r["longitude"] = _dms_to_dec(v)
+            if _i % 5 == 0:
+                self._save_cp({"stage": "deep", "url": self.url, "rows": rows, "deep_index": _i})
 
     def _resolve(self, rows):
         seen = {}
@@ -264,6 +312,8 @@ class UniversalScraper:
     def _scrape_raw(self):
         seen_keys = set()
         out = []
+        if self._cp and self._cp.get('stage') == 'list':
+            return self._paged(out, seen_keys, start=1)
         if self.mode in ("auto", "single"):
             page = _fetch(self.url, self.engine, self.stealth)
             table = _biggest_table(page)
@@ -282,6 +332,15 @@ class UniversalScraper:
         return self._paged(out, seen_keys, start=1)
 
     def _paged(self, out, seen_keys, start=1):
+        cp = self._cp
+        if cp and cp.get("stage") == "list" and cp.get("url") == self.url:
+            out.clear()
+            out.extend(cp.get("rows", []))
+            seen_keys.clear()
+            for r in out:
+                seen_keys.add(json.dumps(r, sort_keys=True))
+            start = cp.get("last_page", start - 1) + 1
+            self._cp = None
         last_sig = None
         for n in range(start, self.max_pages + 1):
             time.sleep(self.rate_limit)
@@ -302,6 +361,7 @@ class UniversalScraper:
                 k = json.dumps(r, sort_keys=True)
                 if k not in seen_keys:
                     seen_keys.add(k); out.append(r); added += 1
+            self._save_cp({"stage": "list", "url": self.url, "rows": out, "last_page": n})
             if added == 0:
                 break
         return out

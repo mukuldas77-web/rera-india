@@ -8,7 +8,10 @@ Run locally (needs the scraper deps + browsers):
     python -m playwright install chromium
     python -m uvicorn webapp.scraper_app:app --port 8010   # from the repo root
 """
+import glob
 import io
+import json as _json
+import os
 import sys
 import time as _time
 from pathlib import Path
@@ -19,7 +22,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from rera_scraper.universal import UniversalScraper  # noqa: E402
+from rera_scraper.universal import UniversalScraper, RUNS_DIR  # noqa: E402
 
 app = FastAPI(title="Universal Scraper")
 _last = {"rows": []}
@@ -71,6 +74,37 @@ def download_csv():
     return StreamingResponse(
         io.BytesIO(csv_text.encode("utf-8-sig")), media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=scraped.csv"})
+
+
+@app.get("/api/runs")
+def list_runs():
+    runs = []
+    for fp in sorted(glob.glob(os.path.join(RUNS_DIR, "*.json")), key=lambda f: -os.path.getmtime(f)):
+        try:
+            d = _json.load(open(fp, encoding="utf-8"))
+        except Exception:
+            continue
+        runs.append({"id": os.path.basename(fp)[:-5], "url": d.get("url", ""),
+                     "stage": d.get("stage", "?"), "rows": len(d.get("rows", [])),
+                     "when": int(os.path.getmtime(fp))})
+    return {"runs": runs}
+
+
+@app.get("/api/run/{run_id}/download")
+def download_run(run_id: str):
+    fp = os.path.join(RUNS_DIR, os.path.basename(run_id) + ".json")
+    try:
+        rows = _json.load(open(fp, encoding="utf-8")).get("rows", [])
+    except Exception:
+        rows = []
+    df = pd.DataFrame(rows if rows else [{"info": "no data"}])
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as xw:
+        df.to_excel(xw, index=False, sheet_name="run")
+    buf.seek(0)
+    return StreamingResponse(
+        buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=" + run_id + ".xlsx"})
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -129,6 +163,8 @@ HTML = """<!doctype html><html><head><meta charset="utf-8">
 </details>
  <div id="status" class="mut">Enter a listing URL and click Scrape. JS-heavy sites: choose "dynamic". Tick "get lat/long" for coordinates.</div>
  <div id="out"></div>
+ <h3 style="margin-top:26px;color:var(--mut);font-size:14px">Past runs (auto-saved, crash-safe)</h3>
+ <div id="runs" class="mut">loading...</div>
 </div>
 <script>
 const $=id=>document.getElementById(id);
@@ -157,4 +193,15 @@ async function run(){
 function dl(){window.location='/api/download';}
 function dlcsv(){window.location='/api/download.csv';}
 $('url').addEventListener('keydown',e=>{if(e.key==='Enter')run();});
+async function loadRuns(){
+ try{
+  const d=await (await fetch('/api/runs')).json();
+  if(!d.runs.length){$('runs').textContent='No saved runs yet.';return;}
+  let h='<table><thead><tr><th>URL</th><th>Status</th><th>Rows</th><th></th></tr></thead><tbody>';
+  h+=d.runs.map(r=>'<tr><td style="max-width:520px">'+r.url+'</td><td>'+(r.stage==='done'?'✓ complete':'⏳ '+r.stage+' (resumable)')+'</td><td>'+r.rows+'</td><td><a href="/api/run/'+r.id+'/download">download</a></td></tr>').join('');
+  $('runs').innerHTML=h+'</tbody></table>';
+ }catch(e){$('runs').textContent='';}
+}
+loadRuns();
+const _origRun=run; run=async function(){ await _origRun(); loadRuns(); };
 </script></body></html>"""

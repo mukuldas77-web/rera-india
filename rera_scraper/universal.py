@@ -151,8 +151,7 @@ def _dms_to_dec(text):
 
 
 def _detail_pairs(html):
-    """Extract {label: value} pairs from a detail/profile page (bootstrap
-    label+col, th/td, dt/dd layouts)."""
+    """Extract {label: value} pairs from a detail/profile page."""
     from bs4 import BeautifulSoup
     soup = BeautifulSoup(html, "html.parser")
     pairs = {}
